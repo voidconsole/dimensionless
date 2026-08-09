@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "void",
+    "slug": "void-app",
+    "version": "1.71.8",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#060607",
+    "splash": {
+      "backgroundColor": "#060607",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.thevoid.app",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "VOID uses the microphone for voice notes.",
+        "NSCameraUsageDescription": "VOID uses the camera to attach photos to notes.",
+        "NSPhotoLibraryUsageDescription": "VOID accesses your photo library to attach images."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#060607"
+      },
+      "package": "com.thevoid.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+    "plugins": [
+      "expo-camera",
+      "expo-av",
+      "expo-image-picker"
+    ],
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "name": "VOID",
+      "shortName": "VOID",
+      "themeColor": "#060607",
+      "backgroundColor": "#060607",
+      "favicon": "./assets/icon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3ab59453-16a0-4044-b69a-e0b0bc4d5068"
+      }
+    },
+    "experiments": {
+      "baseUrl": "/dimensionless/"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+
+# CNG — EAS runs expo prebuild to regenerate these from source
+# Never commit the native folders when using Prebuild/CNG
+android/
+ios/
+
+# Build artifacts
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# Logs
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Local env
+.env
+.env.local
+.env*.local
+
+# macOS
+.DS_Store
