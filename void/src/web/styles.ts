@@ -45,6 +45,28 @@ textarea {
   background: rgba(155, 198, 255, 0.28);
   color: rgba(255, 255, 255, 0.95);
 }
+/* minimal thin subtle scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
 `;
 
 export function injectWebStyles(): void {

@@ -131,7 +131,7 @@ const s = StyleSheet.create({
                 marginBottom: 16,
         },
         wordmarkText: {
-                fontFamily: "Courier New",
+                fontFamily: FONTS.mono,
                 fontSize: 11,
                 letterSpacing: 6,
                 color: "rgba(255,255,255,0.4)",

@@ -164,17 +164,32 @@ function contentText(note: VoidNote): string {
         return lines.join("\n").trim();
 }
 
+// The editor historically emitted both `att` and `attr` tokens. Accept both
+// spellings when syncing so an older/local note cannot lose its attachment.
+const ATTACHMENT_TOKEN_RE = /\{\{att(?:r)?\s*:\s*([^}]+?)\}\}/g;
+
 function attachmentMarkdown(a: Attachment, url: string | undefined): string {
+        // Never emit code formatting for attachments — a missing URL still keeps
+        // the file visible as plain text so nothing is ever "dropped".
         if (a.type === "image") {
-                return url ? `![${a.name}](${url})` : `\`${a.name}\``;
+                return url ? `![${a.name}](${url})` : a.name;
         }
+
         if (a.type === "voice") {
                 const dur = a.durationSecs
                         ? ` (${Math.floor(a.durationSecs / 60)}:${String(a.durationSecs % 60).padStart(2, "0")})`
                         : "";
-                return url ? `[${a.name}${dur}](${url})` : `\`${a.name}\``;
+                return url ? `[${a.name}${dur}](${url})` : `${a.name}${dur}`;
         }
-        return url ? `[${a.name}](${url})` : `\`${a.name}\``;
+        return url ? `[${a.name}](${url})` : a.name;
+}
+
+// Converts LaTeX delimiters to the forms GitHub renders natively
+// ($inline$, $$display$$, and ```math blocks).
+function githubMath(text: string): string {
+        return (text ?? "")
+                .replace(/\\\[([\s\S]*?)\\\]/g, (_, c: string) => "$$\n" + c.trim() + "\n$$")
+                .replace(/\\\(([\s\S]*?)\\\)/g, (_, c: string) => "$" + c.trim() + "$");
 }
 
 function footer(note: VoidNote): string {
@@ -189,19 +204,21 @@ function footer(note: VoidNote): string {
 }
 
 function buildBody(note: VoidNote, urlMap: Record<string, string>): string {
-        let body = contentText(note);
+        let body = githubMath(contentText(note));
 
         const appended: string[] = [];
+        const referenced = new Set<string>();
+        body = body.replace(ATTACHMENT_TOKEN_RE, (_, id: string) => {
+                const a = note.attachments.find((item) => item.id === id.trim());
+                if (!a) return "";
+                referenced.add(a.id);
+                return attachmentMarkdown(a, urlMap[a.id]);
+        });
         for (const a of note.attachments) {
-                const token = `{{att:${a.id}}}`;
-                const md = attachmentMarkdown(a, urlMap[a.id]);
-                if (body.includes(token)) {
-                        body = body.split(token).join(md);
-                } else {
-                        appended.push(md);
+                if (!referenced.has(a.id)) {
+                        appended.push(attachmentMarkdown(a, urlMap[a.id]));
                 }
         }
-        body = body.replace(/\{\{att:[^}]*\}\}/g, "");
         if (appended.length) {
                 const extra = appended.join("\n\n");
                 body = body.trim() ? `${body.trim()}\n\n${extra}` : extra;
@@ -212,9 +229,9 @@ function buildBody(note: VoidNote, urlMap: Record<string, string>): string {
 }
 
 function buildBaseBody(note: VoidNote): string {
-        const body = contentText(note).replace(/\{\{att:[^}]*\}\}/g, "");
-        const f = footer(note);
-        return body.trim() ? `${body.trim()}\n\n${f}` : f;
+        // Publish attachment names immediately. If an upload or follow-up
+        // PATCH fails, the issue still retains every attachment reference.
+        return buildBody(note, {});
 }
 
 async function uploadAttachments(
@@ -224,26 +241,29 @@ async function uploadAttachments(
         commitMessage: string,
 ): Promise<Record<string, string>> {
         const map: Record<string, string> = {};
-        await Promise.all(
-                note.attachments.map(async (a) => {
-                        if (a.uploadedUrl) {
-                                map[a.id] = a.uploadedUrl;
-                                return;
-                        }
-                        try {
-                                const url = await uploadToAssetsRepo(
-                                        cfg,
-                                        a.uri,
-                                        a.name,
-                                        issueNumber,
-                                        commitMessage,
-                                );
-                                map[a.id] = url;
-                                a.uploadedUrl = url;
-                                return;
-                        } catch {
-                                // fall back to catbox
-                        }
+        // Sequential on purpose: parallel PUTs to the Contents API race on
+        // branch head/sha and can fail each other. One bad attachment must
+        // never abort the rest.
+        for (const a of note.attachments) {
+                if (a.uploadedUrl) {
+                        map[a.id] = a.uploadedUrl;
+                        continue;
+                }
+                try {
+                        const url = await uploadToAssetsRepo(
+                                cfg,
+                                a.uri,
+                                a.name,
+                                issueNumber,
+                                commitMessage,
+                        );
+                        map[a.id] = url;
+                        a.uploadedUrl = url;
+                        continue;
+                } catch {
+                        // fall back to catbox
+                }
+                try {
                         const url = await uploadFile(
                                 a.uri,
                                 a.name,
@@ -253,8 +273,8 @@ async function uploadAttachments(
                                 map[a.id] = url;
                                 a.uploadedUrl = url;
                         }
-                }),
-        );
+                } catch {}
+        }
         return map;
 }
 
@@ -347,23 +367,48 @@ export async function syncNote(note: VoidNote): Promise<SyncResult> {
                 const issue = (await res.json()) as any;
                 const issueNumber = issue.number;
 
-                if (note.attachments.length > 0) {
-                        const urlMap = await uploadAttachments(
-                                cfg,
-                                note,
-                                issueNumber,
-                                title,
-                        );
-                        await ghFetch(
-                                `/repos/${cfg.owner}/${cfg.repo}/issues/${issueNumber}`,
-                                {
-                                        method: "PATCH",
-                                        body: JSON.stringify({
-                                                body: buildBody(note, urlMap),
-                                        }),
-                                },
-                                cfg.token,
-                        );
+                // The issue now exists — never report failure past this point,
+                // or the queued retry would create a duplicate issue.
+                try {
+                        if (note.attachments.length > 0) {
+                                const urlMap = await uploadAttachments(
+                                        cfg,
+                                        note,
+                                        issueNumber,
+                                        title,
+                                );
+                                await ghFetch(
+                                        `/repos/${cfg.owner}/${cfg.repo}/issues/${issueNumber}`,
+                                        {
+                                                method: "PATCH",
+                                                body: JSON.stringify({
+                                                        body: buildBody(
+                                                                note,
+                                                                urlMap,
+                                                        ),
+                                                }),
+                                        },
+                                        cfg.token,
+                                );
+                        }
+                } catch {
+                        // Last resort: patch plain attachment names so files are
+                        // at least visible in the issue.
+                        try {
+                                await ghFetch(
+                                        `/repos/${cfg.owner}/${cfg.repo}/issues/${issueNumber}`,
+                                        {
+                                                method: "PATCH",
+                                                body: JSON.stringify({
+                                                        body: buildBody(
+                                                                note,
+                                                                {},
+                                                        ),
+                                                }),
+                                        },
+                                        cfg.token,
+                                );
+                        } catch {}
                 }
 
                 return {
@@ -385,33 +430,45 @@ export function lastSyncedAt(): number {
 
 export async function fetchRemoteNotes(
         labelName?: string,
+        all: boolean = false,
 ): Promise<VoidNote[]> {
         const cfg = await loadGitHubConfig();
         if (!cfg) return [];
 
-        const since = syncStore.getString("since");
-        const params = new URLSearchParams({
-                state: "open",
-                per_page: "100",
-                sort: "created",
-                direction: "desc",
-        });
-        if (labelName) params.set("labels", labelName);
-        if (since) params.set("since", since);
-
+        const notes: VoidNote[] = [];
+        let page = 1;
         try {
-                const res = await ghFetch(
-                        `/repos/${cfg.owner}/${cfg.repo}/issues?${params.toString()}`,
-                        { method: "GET" },
-                        cfg.token,
-                );
-                if (!res.ok) return [];
-                const issues = (await res.json()) as any[];
-                syncStore.set("since", new Date().toISOString());
+                // eslint-disable-next-line no-constant-condition
+                while (true) {
+                        const params = new URLSearchParams({
+                                state: all ? "all" : "open",
+                                per_page: "100",
+                                page: String(page),
+                                sort: "created",
+                                direction: "desc",
+                        });
+                        if (labelName) params.set("labels", labelName);
+
+                        const res = await ghFetch(
+                                `/repos/${cfg.owner}/${cfg.repo}/issues?${params.toString()}`,
+                                { method: "GET" },
+                                cfg.token,
+                        );
+                        if (!res.ok) break;
+                        const issues = (await res.json()) as any[];
+                        if (issues.length === 0) break;
+                        notes.push(
+                                ...issues
+                                        .filter((i) => !i.pull_request)
+                                        .map(issueToNote),
+                        );
+                        if (issues.length < 100) break;
+                        page++;
+                }
                 syncStore.set("lastSyncAt", String(Date.now()));
-                return issues.map(issueToNote);
+                return notes;
         } catch {
-                return [];
+                return notes;
         }
 }
 
@@ -472,5 +529,8 @@ export async function captureNote(note: VoidNote): Promise<SyncResult> {
 }
 
 export function stripAttachmentTokens(text: string): string {
-        return (text ?? "").replace(/\{\{att:[^}]*\}\}/g, "");
+        return (text ?? "").replace(
+                /\{\{att(?:r)?\s*:\s*[^}]+?\}\}/g,
+                "",
+        );
 }

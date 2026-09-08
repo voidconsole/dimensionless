@@ -94,9 +94,10 @@ interface Props {
         hasContent: boolean;
         onSend: () => void;
         disabled?: boolean;
+        style?: object;
 }
 
-export function SendButton({ hasContent, onSend, disabled }: Props) {
+export function SendButton({ hasContent, onSend, disabled, style }: Props) {
         const scale = useSharedValue(1);
         const ringScale = useSharedValue(1);
         const ringOpacity = useSharedValue(0);
@@ -263,7 +264,7 @@ export function SendButton({ hasContent, onSend, disabled }: Props) {
         }));
 
         return (
-                <View style={s.wrap} pointerEvents="box-none">
+                <View style={[s.wrap, style]} pointerEvents="box-none">
                         <Animated.View
                                 style={[s.glow, glowStyle]}
                                 pointerEvents="none"

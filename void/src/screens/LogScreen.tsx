@@ -103,20 +103,25 @@ export function LogScreen() {
                                 new Date(a.createdAt).getTime(),
                 );
 
-        const refresh = useCallback(async () => {
-                const now = Date.now();
-                if (now - lastFetchRef.current < 30_000) return;
-                lastFetchRef.current = now;
-                setRefreshing(true);
-                light();
-                try {
-                        const remote = await fetchRemoteNotes(
-                                filter === "all" ? undefined : filter,
-                        );
-                        if (remote.length > 0) mergeRemoteNotes(remote);
-                } catch {}
-                setRefreshing(false);
-        }, [filter]);
+        const refresh = useCallback(
+                async (all = false) => {
+                        const now = Date.now();
+                        // explicit sync always fetches; pull-to-refresh is throttled
+                        if (!all && now - lastFetchRef.current < 30_000) return;
+                        lastFetchRef.current = now;
+                        setRefreshing(true);
+                        light();
+                        try {
+                                const remote = await fetchRemoteNotes(
+                                        filter === "all" ? undefined : filter,
+                                        all,
+                                );
+                                if (remote.length > 0) mergeRemoteNotes(remote);
+                        } catch {}
+                        setRefreshing(false);
+                },
+                [filter],
+        );
 
         useFocusEffect(
                 useCallback(() => {
@@ -137,7 +142,9 @@ export function LogScreen() {
                                         </Text>
                                         {Platform.OS === "web" && (
                                                 <TouchableOpacity
-                                                        onPress={refresh}
+                                                        onPress={() =>
+                                                                refresh(true)
+                                                        }
                                                         hitSlop={8}
                                                         style={s.syncBtn}
                                                 >
@@ -156,6 +163,7 @@ export function LogScreen() {
                                 showsHorizontalScrollIndicator={false}
                                 contentContainerStyle={s.filters}
                                 keyboardShouldPersistTaps="handled"
+                                style={s.filtersRow}
                         >
                                 <FilterPill
                                         label="all"
@@ -261,6 +269,7 @@ const s = StyleSheet.create({
                 paddingHorizontal: 16,
                 paddingBottom: 12,
         },
+        filtersRow: { flexGrow: 0, flexShrink: 0 },
         filterPill: {
                 flexDirection: "row",
                 alignItems: "center",
@@ -278,7 +287,7 @@ const s = StyleSheet.create({
         },
         scroll: { flex: 1 },
         list: { paddingHorizontal: 14, paddingTop: 4 },
-        empty: { alignItems: "center", paddingTop: 80, gap: 10 },
+        empty: { alignItems: "center", paddingTop: 24, gap: 10 },
         emptyText: {
                 fontSize: 14,
                 color: "rgba(255,255,255,0.2)",

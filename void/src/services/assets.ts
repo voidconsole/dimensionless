@@ -9,7 +9,7 @@ import type { GitHubConfig } from "./github";
 const ASSETS_REPO = "assets";
 const cache = new MMKV({ id: "void-assets" });
 
-const MAX_ASSETS_SIZE = 25 * 1024 * 1024;
+export const MAX_ASSETS_SIZE = 25 * 1024 * 1024;
 
 async function ghApi(
         path: string,
@@ -29,7 +29,8 @@ async function ghApi(
 }
 
 export async function getAssetsBranch(cfg: GitHubConfig): Promise<string> {
-        const cached = cache.getString("branch");
+        const cacheKey = `branch:${cfg.owner.toLowerCase()}`;
+        const cached = cache.getString(cacheKey);
         if (cached) return cached;
         try {
                 const res = await ghApi(
@@ -40,7 +41,7 @@ export async function getAssetsBranch(cfg: GitHubConfig): Promise<string> {
                 if (res.ok) {
                         const repo = (await res.json()) as any;
                         const branch = repo.default_branch || "main";
-                        cache.set("branch", branch);
+                        cache.set(cacheKey, branch);
                         return branch;
                 }
                 if (res.status === 404) {
@@ -58,7 +59,7 @@ export async function getAssetsBranch(cfg: GitHubConfig): Promise<string> {
                                 cfg.token,
                         );
                         if (createRes.ok) {
-                                cache.set("branch", "main");
+                                cache.set(cacheKey, "main");
                                 return "main";
                         }
                 }
@@ -80,7 +81,10 @@ export function buildAssetsPath(
         const d = new Date();
         const pad = (n: number) => String(n).padStart(2, "0");
         const folder = `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
-        const file = `${issueNumber}${Date.now()}.${extFromName(name)}`;
+        // random suffix keeps concurrent uploads of multiple attachments from
+        // colliding on the same path (same-millisecond Date.now())
+        const rand = Math.random().toString(36).slice(2, 8);
+        const file = `${issueNumber}-${Date.now()}-${rand}.${extFromName(name)}`;
         return `${folder}/${file}`;
 }
 
@@ -93,6 +97,8 @@ export function jsdelivrUrl(
                 .split("/")
                 .map(encodeURIComponent)
                 .join("/");
+        // Pin the branch returned by the API. A user can have a non-main
+        // default branch, and omitting it makes freshly uploaded images 404.
         return `https://cdn.jsdelivr.net/gh/${cfg.owner}/${ASSETS_REPO}@${branch}/${encoded}`;
 }
 

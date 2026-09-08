@@ -1,3 +1,5 @@
+import { Platform } from "react-native";
+
 export const COLORS = {
         void: "#060607",
         surface: "#0f0f11",
@@ -30,7 +32,10 @@ export const COLORS = {
 
 export const FONTS = {
         sans: "System",
-        mono: "Courier New",
+        mono:
+                Platform.OS === "web"
+                        ? "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+                        : "Courier New",
 };
 
 export const SPRING = {

@@ -1,6 +1,5 @@
 import React, { useEffect } from "react";
 import { View, Text, StyleSheet, Pressable, Linking } from "react-native";
-import Markdown from "react-native-markdown-display";
 import Animated, {
         useSharedValue,
         useAnimatedStyle,
@@ -17,7 +16,7 @@ import { GestureDetector, Gesture } from "react-native-gesture-handler";
 import { Feather } from "@expo/vector-icons";
 import { COLORS, FONTS, SPRING } from "../theme/index";
 import { useLabelStore } from "../store/useLabelStore";
-import { stripAttachmentTokens } from "../services/github";
+import { NoteMarkdown } from "./NoteMarkdown";
 import type { VoidNote } from "../services/github";
 import dayjs from "dayjs";
 
@@ -30,6 +29,10 @@ interface Props {
 const DELETE_THRESHOLD = -80;
 
 type IconName = React.ComponentProps<typeof Feather>["name"];
+
+function stripTokens(text: string): string {
+        return (text ?? "").replace(/\{\{att:[^}]*\}\}/g, "");
+}
 
 function attIconName(type: string): IconName {
         switch (type) {
@@ -166,7 +169,7 @@ export function NoteCard({ note, index, onDelete }: Props) {
                 ],
         }));
 
-        const clean = stripAttachmentTokens(note.text).trim();
+        const clean = stripTokens(note.text).trim();
         const preview = clean.slice(0, 240);
         const formattedDate = dayjs(note.createdAt).format("MMM D · h:mma");
         const extraLabels = Math.max(0, labels.length - 3);
@@ -207,58 +210,16 @@ export function NoteCard({ note, index, onDelete }: Props) {
                                                         { backgroundColor: catColor },
                                                 ]}
                                         />
+                                        <Pressable
+                                                onPress={openIssue}
+                                                style={{ flex: 1 }}
+                                        >
 
                                         {clean.length > 0 && (
-                                                <Markdown
-                                                        style={{
-                                                                body: s.text,
-                                                                heading1: s.text,
-                                                                heading2: s.text,
-                                                                heading3: s.text,
-                                                                heading4: s.text,
-                                                                heading5: s.text,
-                                                                heading6: s.text,
-                                                                blockquote: {
-                                                                        backgroundColor:
-                                                                                "rgba(255,255,255,0.03)",
-                                                                        borderLeftWidth: 2,
-                                                                        borderLeftColor:
-                                                                                "rgba(255,255,255,0.15)",
-                                                                        paddingLeft: 10,
-                                                                        paddingVertical: 4,
-                                                                        borderRadius: 4,
-                                                                        opacity: 0.85,
-                                                                },
-                                                                code_inline: {
-                                                                        backgroundColor:
-                                                                                "rgba(255,255,255,0.06)",
-                                                                        color: "rgba(255,255,255,0.7)",
-                                                                        fontFamily:
-                                                                                FONTS.mono,
-                                                                        fontSize: 12,
-                                                                        paddingHorizontal: 4,
-                                                                        borderRadius: 3,
-                                                                },
-                                                                code_block: {
-                                                                        backgroundColor:
-                                                                                "rgba(255,255,255,0.04)",
-                                                                        color: "rgba(255,255,255,0.7)",
-                                                                },
-                                                                fence: {
-                                                                        backgroundColor:
-                                                                                "rgba(255,255,255,0.04)",
-                                                                        color: "rgba(255,255,255,0.7)",
-                                                                        padding: 10,
-                                                                        borderRadius: 8,
-                                                                        marginVertical: 6,
-                                                                },
-                                                                link: {
-                                                                        color: COLORS.accentBlue,
-                                                                },
-                                                        }}
-                                                >
-                                                        {preview}
-                                                </Markdown>
+                                                <NoteMarkdown
+                                                        source={preview}
+                                                        preview
+                                                />
                                         )}
 
                                         {note.attachments.length > 0 && (
@@ -390,8 +351,9 @@ export function NoteCard({ note, index, onDelete }: Props) {
                                                                         syncDotStyle,
                                                                 ]}
                                                         />
-                                                )}
+                                                        )}
                                         </View>
+                                        </Pressable>
                                 </Animated.View>
                         </View>
                 </GestureDetector>
@@ -429,15 +391,16 @@ const s = StyleSheet.create({
         attRow: {
                 flexDirection: "row",
                 flexWrap: "wrap",
-                gap: 5,
-                marginBottom: 10,
+                gap: 8,
+                rowGap: 6,
+                marginBottom: 12,
         },
         attChip: {
                 flexDirection: "row",
                 alignItems: "center",
-                gap: 5,
-                paddingVertical: 2,
-                paddingHorizontal: 8,
+                gap: 6,
+                paddingVertical: 3,
+                paddingHorizontal: 10,
                 borderRadius: 6,
                 backgroundColor: "rgba(255,255,255,0.04)",
                 borderWidth: 0.5,

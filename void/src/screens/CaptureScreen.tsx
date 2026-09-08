@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useEffect } from "react";
+﻿import React, { useRef, useState, useCallback, useEffect } from "react";
 import {
         View,
         TextInput,
@@ -28,17 +28,25 @@ import Animated, {
 } from "react-native-reanimated";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
 import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { COLORS, SPRING } from "../theme/index";
+import { COLORS, FONTS, SPRING } from "../theme/index";
 import { SendButton } from "../components/SendButton";
+import { NoteMarkdown, noteMarkdownStyles } from "../components/NoteMarkdown";
 import { useHaptic } from "../hooks/useHaptic";
 import { useRecording } from "../hooks/useRecording";
 import { useNoteStore, createNote } from "../store/useNoteStore";
 import { useLabelStore } from "../store/useLabelStore";
 import { captureNote } from "../services/github";
 import type { Attachment, GitHubLabel } from "../services/github";
+import { MAX_ASSETS_SIZE } from "../services/assets";
+import {
+        URL_PATTERN,
+        looksLikeLatexPaste,
+        urlToMarkdownLink,
+} from "../services/markdownMath";
 import { playPop, playSuccess, playError, playTap } from "../services/sound";
 
 type IconName = React.ComponentProps<typeof Feather>["name"];
@@ -60,7 +68,29 @@ function attIconName(type: Attachment["type"]): IconName {
         }
 }
 
-function webFileToAttachment(file: File): Attachment {
+// Wraps a pasted LaTeX snippet with inline ($...$) or block ($$...$$) delimiters.
+function wrapLatexPaste(raw: string): string {
+        const t = raw.trim();
+        if (t.startsWith("$") && t.endsWith("$")) return t;
+        return t.includes("\n") ? "$$" + t + "$$" : "$" + t + "$";
+}
+
+// Collision-proof attachment id: tokens {{att:id}} must be unique per note or
+// one attachment's markdown can replace another's.
+function newAttId(): string {
+        return `${Date.now().toString(36)}${Math.random()
+                .toString(36)
+                .slice(2, 8)}`;
+}
+
+function formatMB(bytes: number): string {
+        if (bytes >= 1024 * 1024)
+                return (bytes / (1024 * 1024)).toFixed(1).replace(/\.0$/, "") + " MB";
+        return Math.max(1, Math.round(bytes / (1024 * 1024))) + " MB";
+}
+
+function webFileToAttachment(file: File): Attachment | null {
+        if (file.size > MAX_ASSETS_SIZE) return null;
         const mime = file.type || "application/octet-stream";
         let type: Attachment["type"] = "file";
         if (mime.startsWith("image/")) type = "image";
@@ -68,7 +98,7 @@ function webFileToAttachment(file: File): Attachment {
         else if (mime.startsWith("audio/")) type = "voice";
         const name = file.name || `file_${Date.now()}`;
         return {
-                id: `w${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                id: newAttId(),
                 type,
                 uri: URL.createObjectURL(file),
                 name,
@@ -129,10 +159,10 @@ const chipS = StyleSheet.create({
         main: {
                 flexDirection: "row",
                 alignItems: "center",
-                gap: 5,
-                paddingVertical: 4,
-                paddingLeft: 9,
-                paddingRight: 4,
+                gap: 7,
+                paddingVertical: 5,
+                paddingLeft: 11,
+                paddingRight: 5,
                 flexShrink: 1,
         },
         label: {
@@ -140,7 +170,7 @@ const chipS = StyleSheet.create({
                 color: "rgba(255,255,255,0.45)",
                 flexShrink: 1,
         },
-        x: { paddingHorizontal: 6, paddingVertical: 4 },
+        x: { paddingHorizontal: 8, paddingVertical: 5 },
 });
 
 function RecordingBar({ formatted }: { formatted: string }) {
@@ -193,7 +223,7 @@ const recS = StyleSheet.create({
         time: {
                 fontSize: 10.5,
                 color: "rgba(222,88,88,0.8)",
-                fontFamily: "Courier New",
+                        fontFamily: FONTS.mono,
                 letterSpacing: 1,
         },
 });
@@ -247,7 +277,7 @@ const toastS = StyleSheet.create({
         },
         text: {
                 fontSize: 12,
-                fontFamily: "Courier New",
+                        fontFamily: FONTS.mono,
                 color: "rgba(255,255,255,0.75)",
                 letterSpacing: 0.6,
         },
@@ -267,6 +297,17 @@ function LabelPickerModal({
         onClose: () => void;
 }) {
         const { light } = useHaptic();
+        const [query, setQuery] = useState("");
+
+        useEffect(() => {
+                if (visible) setQuery("");
+        }, [visible]);
+
+        const q = query.trim().toLowerCase();
+        const filtered = q
+                ? labels.filter((l) => l.name.toLowerCase().includes(q))
+                : labels;
+
         return (
                 <Modal
                         transparent
@@ -290,15 +331,51 @@ function LabelPickerModal({
                                                         labels
                                                 </Text>
                                                 <Text style={lpS.subtitle}>
-                                                        pick any number
+                                                        {selected.length === 0
+                                                                ? "pick any number"
+                                                                : `${selected.length} selected`}
                                                 </Text>
+                                        </View>
+                                        <View style={lpS.searchWrap}>
+                                                <Feather
+                                                        name="search"
+                                                        size={13}
+                                                        color="rgba(255,255,255,0.28)"
+                                                />
+                                                <TextInput
+                                                        value={query}
+                                                        onChangeText={setQuery}
+                                                        placeholder="search labels..."
+                                                        placeholderTextColor="rgba(255,255,255,0.22)"
+                                                        style={lpS.searchInput}
+                                                        autoCorrect={false}
+                                                        autoCapitalize="none"
+                                                        keyboardAppearance="dark"
+                                                        selectionColor={COLORS.caret}
+                                                        returnKeyType="search"
+                                                />
+                                                {query.length > 0 && (
+                                                        <Pressable
+                                                                onPress={() =>
+                                                                        setQuery("")
+                                                                }
+                                                                hitSlop={8}
+                                                        >
+                                                                <Feather
+                                                                        name="x"
+                                                                        size={13}
+                                                                        color="rgba(255,255,255,0.3)"
+                                                                />
+                                                        </Pressable>
+                                                )}
                                         </View>
                                         <ScrollView
                                                 style={lpS.list}
                                                 showsVerticalScrollIndicator={false}
                                                 bounces
+                                                keyboardShouldPersistTaps="handled"
                                         >
-                                                {labels.map((label) => {
+                                                {filtered.map((label) => {
                                                         const active =
                                                                 selected.includes(
                                                                         label.name,
@@ -359,6 +436,30 @@ function LabelPickerModal({
                                                                 load labels
                                                         </Text>
                                                 )}
+                                                {labels.length > 0 &&
+                                                        filtered.length === 0 && (
+                                                                <View
+                                                                        style={
+                                                                                lpS.noMatch
+                                                                        }
+                                                                >
+                                                                        <Feather
+                                                                                name="search"
+                                                                                size={16}
+                                                                                color="rgba(255,255,255,0.2)"
+                                                                        />
+                                                                        <Text
+                                                                                style={
+                                                                                        lpS.noMatchText
+                                                                                }
+                                                                        >
+                                                                                no labels
+                                                                                match "
+                                                                                {query}
+                                                                                "
+                                                                        </Text>
+                                                                </View>
+                                                        )}
                                         </ScrollView>
                                         <TouchableOpacity
                                                 style={lpS.done}
@@ -472,19 +573,47 @@ const lpS = StyleSheet.create({
                 paddingHorizontal: 4,
         },
         title: {
-                fontFamily: "Courier New",
+                        fontFamily: FONTS.mono,
                 fontSize: 12,
                 letterSpacing: 2,
                 textTransform: "uppercase",
                 color: "rgba(255,255,255,0.6)",
         },
         subtitle: {
-                fontFamily: "Courier New",
+                        fontFamily: FONTS.mono,
                 fontSize: 10,
                 color: "rgba(255,255,255,0.25)",
                 letterSpacing: 0.5,
         },
         list: { flexGrow: 0, maxHeight: 300 },
+        searchWrap: {
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 8,
+                paddingHorizontal: 12,
+                borderRadius: 10,
+                borderWidth: 0.5,
+                borderColor: "rgba(255,255,255,0.12)",
+                backgroundColor: "rgba(255,255,255,0.045)",
+        },
+        searchInput: {
+                flex: 1,
+                paddingVertical: 9,
+                fontSize: 13.5,
+                color: "rgba(255,255,255,0.85)",
+        },
+        noMatch: {
+                alignItems: "center",
+                gap: 8,
+                paddingVertical: 28,
+        },
+        noMatchText: {
+                fontSize: 12,
+                color: "rgba(255,255,255,0.3)",
+                        fontFamily: FONTS.mono,
+                letterSpacing: 0.4,
+        },
         row: {
                 flexDirection: "row",
                 alignItems: "center",
@@ -507,7 +636,7 @@ const lpS = StyleSheet.create({
                 padding: 24,
                 textAlign: "center",
                 color: "rgba(255,255,255,0.3)",
-                fontFamily: "Courier New",
+                        fontFamily: FONTS.mono,
                 fontSize: 12,
             },
         done: {
@@ -549,12 +678,16 @@ function IconBtn({
         onPress,
         active,
         activeColor,
+        activeBg,
+        activeBorder,
         tint,
 }: {
         name: IconName;
         onPress: () => void;
         active?: boolean;
         activeColor?: string;
+        activeBg?: string;
+        activeBorder?: string;
         tint?: string;
 }) {
         const scale = useSharedValue(1);
@@ -578,8 +711,10 @@ function IconBtn({
                         style={[
                                 tbS.iconBtn,
                                 active && {
-                                        backgroundColor: "rgba(220,52,52,0.1)",
-                                        borderColor: "rgba(220,52,52,0.22)",
+                                        backgroundColor:
+                                                activeBg ?? "rgba(220,52,52,0.1)",
+                                        borderColor:
+                                                activeBorder ?? "rgba(220,52,52,0.22)",
                                 },
                         ]}
                 >
@@ -598,10 +733,13 @@ function Toolbar({
         onPickCamera,
         onPickVideo,
         onToggleRecording,
+        onTogglePreview,
+        previewOpen,
         isRecording,
         hasContent,
         onSend,
         sending,
+        bottomInset,
 }: {
         labels: GitHubLabel[];
         selectedLabels: string[];
@@ -610,13 +748,21 @@ function Toolbar({
         onPickCamera: () => void;
         onPickVideo: () => void;
         onToggleRecording: () => void;
+        onTogglePreview: () => void;
+        previewOpen: boolean;
         isRecording: boolean;
         hasContent: boolean;
         onSend: () => void;
         sending: boolean;
+        bottomInset: number;
 }) {
         return (
-                <View style={tbS.container}>
+                <View
+                        style={[
+                                tbS.container,
+                                { paddingBottom: Math.max(8, bottomInset) },
+                        ]}
+                >
                         <View style={tbS.row}>
                                 <LabelSelector
                                         labels={labels}
@@ -638,12 +784,20 @@ function Toolbar({
                                                 onPress={onToggleRecording}
                                                 active={isRecording}
                                         />
+                                        <IconBtn
+                                                name="eye"
+                                                onPress={onTogglePreview}
+                                                active={previewOpen}
+                                                activeColor="rgba(210,226,255,0.95)"
+                                                activeBg="rgba(155,198,255,0.12)"
+                                                activeBorder="rgba(155,198,255,0.3)"
+                                        />
                                 </View>
-                                <View style={{ flex: 1 }} />
                                 <SendButton
                                         hasContent={hasContent}
                                         onSend={onSend}
                                         disabled={sending}
+                                        style={tbS.send}
                                 />
                         </View>
                 </View>
@@ -661,8 +815,12 @@ const tbS = StyleSheet.create({
         },
         row: {
                 flexDirection: "row",
+                flexWrap: "wrap",
                 alignItems: "center",
                 gap: 6,
+        },
+        send: {
+                marginLeft: "auto",
         },
         iconBtn: {
                 width: 34,
@@ -676,6 +834,78 @@ const tbS = StyleSheet.create({
         },
 });
 
+type EditorMode = "write" | "preview";
+
+const previewMarkdownStyle = {
+        ...noteMarkdownStyles,
+        body: {
+                fontSize: EDIT_FONT,
+                lineHeight: EDIT_LINE,
+                color: COLORS.textPrimary,
+                letterSpacing: 0.15,
+                marginBottom: 10,
+        },
+        heading1: {
+                fontSize: EDIT_FONT + 4,
+                lineHeight: EDIT_LINE + 4,
+                fontWeight: "600",
+                color: COLORS.textPrimary,
+                marginTop: 8,
+                marginBottom: 8,
+        },
+        heading2: {
+                fontSize: EDIT_FONT + 2,
+                lineHeight: EDIT_LINE + 2,
+                fontWeight: "600",
+                color: COLORS.textPrimary,
+                marginTop: 8,
+                marginBottom: 6,
+        },
+        heading3: {
+                fontSize: EDIT_FONT,
+                lineHeight: EDIT_LINE,
+                fontWeight: "600",
+                color: COLORS.textPrimary,
+                marginTop: 6,
+                marginBottom: 6,
+        },
+        heading4: {
+                fontSize: EDIT_FONT - 1,
+                lineHeight: EDIT_LINE,
+                fontWeight: "600",
+                color: COLORS.textPrimary,
+                marginTop: 4,
+                marginBottom: 4,
+        },
+        heading5: { fontSize: EDIT_FONT - 1, lineHeight: EDIT_LINE, color: COLORS.textPrimary },
+        heading6: { fontSize: EDIT_FONT - 1, lineHeight: EDIT_LINE, color: COLORS.textPrimary },
+};
+
+const previewEmptyS = StyleSheet.create({
+        wrap: {
+                alignItems: "center",
+                paddingTop: 60,
+                gap: 10,
+        },
+        icon: {
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                borderWidth: 0.5,
+                borderColor: "rgba(255,255,255,0.07)",
+                backgroundColor: "rgba(255,255,255,0.02)",
+                alignItems: "center",
+                justifyContent: "center",
+        },
+        text: {
+                        fontFamily: FONTS.mono,
+                fontSize: 11,
+                letterSpacing: 1,
+                color: "rgba(255,255,255,0.18)",
+                textTransform: "uppercase",
+        },
+});
+
 export function CaptureScreen() {
         const insets = useSafeAreaInsets();
         const inputRef = useRef<TextInput>(null);
@@ -684,6 +914,8 @@ export function CaptureScreen() {
                 start: 0,
                 end: 0,
         });
+        const prevTextRef = useRef("");
+        const insertRef = useRef<(token: string) => void>(() => {});
         const {
                 sendPulse,
                 light,
@@ -696,6 +928,7 @@ export function CaptureScreen() {
 
         const [title, setTitle] = useState("");
         const [text, setText] = useState("");
+        const [editorMode, setEditorMode] = useState<EditorMode>("write");
         const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
         const [labelsOpen, setLabelsOpen] = useState(false);
         const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -734,10 +967,27 @@ export function CaptureScreen() {
                         setWebDrag(false);
                         const files = Array.from(e.dataTransfer?.files ?? []);
                         if (files.length > 0) {
-                                const atts = files.map(webFileToAttachment);
-                                setAttachments((p) => [...p, ...atts]);
-                                light();
-                                playPop();
+                                const atts = files
+                                        .map(webFileToAttachment)
+                                        .filter(Boolean) as Attachment[];
+                                if (atts.length < files.length) {
+                                        showToast(
+                                                `some files too big - max ${formatMB(
+                                                        MAX_ASSETS_SIZE,
+                                                )}`,
+                                                false,
+                                        );
+                                        hapticError();
+                                        playError();
+                                }
+                                if (atts.length > 0) {
+                                        setAttachments((p) => [
+                                                ...p,
+                                                ...atts,
+                                        ]);
+                                        light();
+                                        playPop();
+                                }
                         } else {
                                 const text = e.dataTransfer?.getData(
                                         "text/plain",
@@ -777,12 +1027,6 @@ export function CaptureScreen() {
                 title.trim().length > 0 ||
                 text.trim().length > 0 ||
                 attachments.length > 0;
-
-        useEffect(() => {
-                if (labels.length > 0 && selectedLabels.length === 0) {
-                        setSelectedLabels([labels[0].name]);
-                }
-        }, [labels]);
 
         const toggleLabel = (name: string) => {
                 setSelectedLabels((prev) =>
@@ -846,7 +1090,10 @@ export function CaptureScreen() {
                 setTimeout(() => {
                         setTitle("");
                         setText("");
+                        prevTextRef.current = "";
                         setAttachments([]);
+                        setSelectedLabels([]);
+                        setEditorMode("write");
                         textOpacity.value = 1;
                         textY.value = 0;
                         setSending(false);
@@ -877,7 +1124,7 @@ export function CaptureScreen() {
                         runOnJS(hapticError)();
                         runOnJS(playError)();
                         runOnJS(showToast)(
-                                result.error ?? "Queued — will sync later",
+                                result.error ?? "Queued - will sync later",
                                 false,
                         );
                 }
@@ -886,11 +1133,15 @@ export function CaptureScreen() {
         const sendRef = useRef<() => void>(() => {});
         sendRef.current = handleSend;
 
+        const formatRef = useRef<(action: string) => void>(() => {});
+        const togglePreviewRef = useRef<() => void>(() => {});
+        const moveLineRef = useRef<(dir: number) => void>(() => {});
+
         useEffect(() => {
                 if (Platform.OS !== "web") return;
                 const onKeyDown = (e: KeyboardEvent) => {
-                        const tag = (document.activeElement as HTMLElement | null)
-                                ?.tagName;
+                        const el = document.activeElement as HTMLElement | null;
+                        const tag = el?.tagName;
                         if (
                                 e.key === "Enter" &&
                                 e.shiftKey &&
@@ -898,6 +1149,49 @@ export function CaptureScreen() {
                         ) {
                                 e.preventDefault();
                                 sendRef.current();
+                                return;
+                        }
+                        const mod = e.ctrlKey || e.metaKey;
+                        if (!mod || el?.id !== "void-body-input") return;
+                        const key = e.key.toLowerCase();
+                        switch (key) {
+                                case "b":
+                                        e.preventDefault();
+                                        formatRef.current("bold");
+                                        break;
+                                case "i":
+                                        e.preventDefault();
+                                        formatRef.current("italic");
+                                        break;
+                                case "e":
+                                        e.preventDefault();
+                                        formatRef.current("code");
+                                        break;
+                                case "k":
+                                        e.preventDefault();
+                                        formatRef.current("link");
+                                        break;
+                                case "m":
+                                        e.preventDefault();
+                                        formatRef.current(
+                                                e.shiftKey ? "mathBlock" : "math",
+                                        );
+                                        break;
+                                case " ":
+                                case "spacebar":
+                                        e.preventDefault();
+                                        togglePreviewRef.current();
+                                        break;
+                                case "arrowup":
+                                        e.preventDefault();
+                                        moveLineRef.current(-1);
+                                        break;
+                                case "arrowdown":
+                                        e.preventDefault();
+                                        moveLineRef.current(1);
+                                        break;
+                                default:
+                                        break;
                         }
                 };
                 document.addEventListener("keydown", onKeyDown, true);
@@ -905,10 +1199,71 @@ export function CaptureScreen() {
                         document.removeEventListener("keydown", onKeyDown, true);
         }, []);
 
+        const applyBodyText = (next: string) => {
+                prevTextRef.current = next;
+                setText(next);
+        };
+
+        const handleBodyChange = (next: string) => {
+                if (Platform.OS !== "web") {
+                        const prev = prevTextRef.current;
+                        if (next.length > prev.length) {
+                                let i = 0;
+                                const min = Math.min(prev.length, next.length);
+                                while (i < min && prev[i] === next[i]) i++;
+                                const inserted = next.slice(i);
+                                const trimmedInserted = inserted.trim();
+                                if (
+                                        inserted.length > 1 &&
+                                        trimmedInserted &&
+                                        looksLikeLatexPaste(inserted)
+                                ) {
+                                        const wrapped = wrapLatexPaste(inserted);
+                                        const transformed =
+                                                next.slice(0, i) + wrapped;
+                                        prevTextRef.current = transformed;
+                                        setText(transformed);
+                                        const cursor = i + wrapped.length;
+                                        setTimeout(() => {
+                                                inputRef.current?.setSelection(
+                                                        cursor,
+                                                        cursor,
+                                                );
+                                        }, 60);
+                                        return;
+                                }
+                                if (
+                                        inserted.length > 1 &&
+                                        trimmedInserted &&
+                                        !trimmedInserted.includes("\n") &&
+                                        URL_PATTERN.test(trimmedInserted)
+                                ) {
+                                        const link = urlToMarkdownLink(
+                                                trimmedInserted,
+                                        );
+                                        const transformed =
+                                                next.slice(0, i) + link;
+                                        prevTextRef.current = transformed;
+                                        setText(transformed);
+                                        const cursor = i + link.length;
+                                        setTimeout(() => {
+                                                inputRef.current?.setSelection(
+                                                        cursor,
+                                                        cursor,
+                                                );
+                                        }, 60);
+                                        return;
+                                }
+                        }
+                }
+                prevTextRef.current = next;
+                setText(next);
+        };
+
         const insertAtCursor = (token: string) => {
                 const pos = selectionRef.current.start ?? text.length;
                 const next = text.slice(0, pos) + token + text.slice(pos);
-                setText(next);
+                applyBodyText(next);
                 inputRef.current?.focus();
                 setTimeout(() => {
                         inputRef.current?.setSelection(
@@ -919,14 +1274,262 @@ export function CaptureScreen() {
                 light();
                 playTap();
         };
+        insertRef.current = insertAtCursor;
+
+        const wrapSelection = (
+                open: string,
+                close: string,
+                placeholder = "text",
+        ) => {
+                const { start, end } = selectionRef.current;
+                const before = text.slice(0, start);
+                const selected = text.slice(start, end);
+                const after = text.slice(end);
+                const inner = selected.length > 0 ? selected : placeholder;
+                const next = before + open + inner + close + after;
+                applyBodyText(next);
+                inputRef.current?.focus();
+                setTimeout(() => {
+                        inputRef.current?.setSelection(
+                                start + open.length,
+                                start + open.length + inner.length,
+                        );
+                }, 60);
+                light();
+                playTap();
+        };
+
+        const linePrefix = (prefix: string) => {
+                const { start } = selectionRef.current;
+                const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+                const line = text.slice(lineStart, start);
+                const next =
+                        text.slice(0, lineStart) + prefix + line + text.slice(start);
+                applyBodyText(next);
+                inputRef.current?.focus();
+                setTimeout(() => {
+                        inputRef.current?.setSelection(
+                                start + prefix.length,
+                                start + prefix.length,
+                        );
+                }, 60);
+                light();
+                playTap();
+        };
+
+        const handleFormat = (action: string) => {
+                switch (action) {
+                        case "bold":
+                                wrapSelection("**", "**");
+                                break;
+                        case "italic":
+                                wrapSelection("*", "*");
+                                break;
+                        case "code":
+                                wrapSelection("`", "`");
+                                break;
+                        case "math":
+                                wrapSelection("$", "$", "x");
+                                break;
+                        case "mathBlock":
+                                wrapSelection("$$", "$$", "x");
+                                break;
+                        case "link": {
+                                const { start, end } = selectionRef.current;
+                                const token = "[text](https://)";
+                                const next =
+                                        text.slice(0, start) + token + text.slice(end);
+                                applyBodyText(next);
+                                inputRef.current?.focus();
+                                setTimeout(() => {
+                                        inputRef.current?.setSelection(
+                                                start + 1,
+                                                start + 5,
+                                        );
+                                }, 60);
+                                break;
+                        }
+                        case "heading":
+                                linePrefix("## ");
+                                break;
+                        case "list":
+                                linePrefix("- ");
+                                break;
+                        default:
+                                break;
+                }
+        };
+
+        const togglePreview = () => {
+                setEditorMode((m) => {
+                        if (m === "write") {
+                                Keyboard.dismiss();
+                                return "preview";
+                        }
+                        setTimeout(() => inputRef.current?.focus(), 60);
+                        return "write";
+                });
+                light();
+                playTap();
+        };
+
+        const moveLine = (dir: number) => {
+                const cur = text;
+                const start = selectionRef.current.start;
+                if (start == null || start > cur.length) return;
+                const lineStart = cur.lastIndexOf("\n", start - 1) + 1;
+                let lineEnd = cur.indexOf("\n", start);
+                if (lineEnd === -1) lineEnd = cur.length;
+
+                const isFirst = lineStart === 0;
+                const isLast = lineEnd === cur.length;
+                if (dir === -1 && isFirst) return;
+                if (dir === 1 && isLast) return;
+
+                let next: string;
+                let newCursor: number;
+
+                if (dir === -1) {
+                        const prevStart = cur.lastIndexOf("\n", lineStart - 2) + 1;
+                        const above = cur.slice(prevStart, lineStart - 1);
+                        next =
+                                cur.slice(0, prevStart) +
+                                cur.slice(lineStart, lineEnd) +
+                                "\n" +
+                                above +
+                                cur.slice(lineEnd);
+                        newCursor = prevStart + (start - lineStart);
+                } else {
+                        const belowStart = lineEnd + 1;
+                        let belowEnd = cur.indexOf("\n", belowStart);
+                        if (belowEnd === -1) belowEnd = cur.length;
+                        const below = cur.slice(belowStart, belowEnd);
+                        next =
+                                cur.slice(0, lineStart) +
+                                below +
+                                "\n" +
+                                cur.slice(lineStart, lineEnd) +
+                                cur.slice(belowEnd);
+                        newCursor =
+                                lineStart + below.length + 1 + (start - lineStart);
+                }
+
+                applyBodyText(next);
+                setTimeout(() => {
+                        inputRef.current?.setSelection(newCursor, newCursor);
+                }, 60);
+                light();
+                playTap();
+        };
+
+        formatRef.current = handleFormat;
+        togglePreviewRef.current = togglePreview;
+        moveLineRef.current = moveLine;
 
         const handleAttachInsert = (att: Attachment) => {
                 insertAtCursor(`{{att:${att.id}}}`);
         };
 
-        const pickCamera = async (video?: boolean) => {
+        const addAttachment = (att: Attachment) => {
+                setAttachments((p) => [...p, att]);
+                insertAtCursor(`{{att:${att.id}}}`);
+        };
+
+        useEffect(() => {
+                if (Platform.OS !== "web") return;
+                const onPaste = (e: ClipboardEvent) => {
+                        const target = e.target as HTMLElement | null;
+                        if (target?.id !== "void-body-input") return;
+                        const items = Array.from(
+                                e.clipboardData?.items ?? [],
+                        );
+                        const fileItem = items.find(
+                                (it) =>
+                                        it.kind === "file" &&
+                                        it.type.startsWith("image/"),
+                        );
+                        if (fileItem) {
+                                e.preventDefault();
+                                const file = fileItem.getAsFile();
+                                if (file) {
+                                        const att = webFileToAttachment(file);
+                                        if (!att) {
+                                                showToast(
+                                                        `image too big - max ${formatMB(
+                                                                MAX_ASSETS_SIZE,
+                                                        )}`,
+                                                        false,
+                                                );
+                                                hapticError();
+                                                playError();
+                                                return;
+                                        }
+                                        setAttachments((p) => [...p, att]);
+                                        insertRef.current(`{{att:${att.id}}}`);
+                                        light();
+                                        playPop();
+                                }
+                                return;
+                        }
+                        const pasted = (
+                                e.clipboardData?.getData("text/plain") ?? ""
+                        ).trim();
+                        if (pasted && looksLikeLatexPaste(pasted)) {
+                                e.preventDefault();
+                                insertRef.current(wrapLatexPaste(pasted));
+                                light();
+                                playTap();
+                                return;
+                        }
+                        if (
+                                pasted &&
+                                !pasted.includes("\n") &&
+                                URL_PATTERN.test(pasted)
+                        ) {
+                                e.preventDefault();
+                                insertRef.current(urlToMarkdownLink(pasted));
+                                light();
+                                playTap();
+                        }
+                };
+                document.addEventListener("paste", onPaste, true);
+                return () =>
+                        document.removeEventListener("paste", onPaste, true);
+        }, [light]);
+
+        const nativeFileSize = async (
+                uri: string,
+        ): Promise<number | undefined> => {
+                try {
+                        const info = await FileSystem.getInfoAsync(uri);
+                        return info.exists ? info.size : undefined;
+                } catch {
+                        return undefined;
+                }
+        };
+
+        const rejectTooBig = (
+                size: number | undefined | null,
+                what: string,
+        ): boolean => {
+                if (size && size > MAX_ASSETS_SIZE) {
+                        showToast(
+                                `${what} too big - max ${formatMB(
+                                        MAX_ASSETS_SIZE,
+                                )}`,
+                                false,
+                        );
+                        hapticError();
+                        playError();
+                        return true;
+                }
+                return false;
+        };
+
+        const pickCamera = async (video?: boolean): Promise<Attachment | null> => {
+                let att: Attachment | null = null;
                 if (Platform.OS === "web") {
-                        // no camera capture in the browser — pick from library
+                        // no camera capture in the browser - pick from library
                         const res =
                                 await ImagePicker.launchImageLibraryAsync({
                                         mediaTypes: video
@@ -936,53 +1539,62 @@ export function CaptureScreen() {
                                 });
                         if (!res.canceled && res.assets[0]) {
                                 const a = res.assets[0];
+                                const size = (a as any).fileSize;
+                                if (
+                                        rejectTooBig(
+                                                size,
+                                                video ? "video" : "photo",
+                                        )
+                                )
+                                        return null;
                                 const ext = video ? "mp4" : "jpg";
-                                setAttachments((p) => [
-                                        ...p,
-                                        {
-                                                id: Date.now().toString(),
-                                                type: video
-                                                        ? "video"
-                                                        : "image",
-                                                uri: a.uri,
-                                                name: `${video ? "video" : "photo"}_${Date.now()}.${ext}`,
-                                                mimeType: video
-                                                        ? "video/mp4"
-                                                        : "image/jpeg",
-                                        },
-                                ]);
-                                light();
-                        }
-                        inputRef.current?.focus();
-                        return;
-                }
-                const { granted } =
-                        await ImagePicker.requestCameraPermissionsAsync();
-                if (!granted) return;
-                const res = await ImagePicker.launchCameraAsync({
-                        mediaTypes: video
-                                ? ImagePicker.MediaTypeOptions.Videos
-                                : ImagePicker.MediaTypeOptions.Images,
-                        quality: 0.85,
-                });
-                if (!res.canceled && res.assets[0]) {
-                        const a = res.assets[0];
-                        const ext = video ? "mp4" : "jpg";
-                        setAttachments((p) => [
-                                ...p,
-                                {
-                                        id: Date.now().toString(),
+                                att = {
+                                        id: newAttId(),
                                         type: video ? "video" : "image",
                                         uri: a.uri,
                                         name: `${video ? "video" : "photo"}_${Date.now()}.${ext}`,
                                         mimeType: video
                                                 ? "video/mp4"
                                                 : "image/jpeg",
-                                },
-                        ]);
+                                };
+                        }
+                } else {
+                        const { granted } =
+                                await ImagePicker.requestCameraPermissionsAsync();
+                        if (!granted) return null;
+                        const res = await ImagePicker.launchCameraAsync({
+                                mediaTypes: video
+                                        ? ImagePicker.MediaTypeOptions.Videos
+                                        : ImagePicker.MediaTypeOptions.Images,
+                                quality: 0.85,
+                        });
+                        if (!res.canceled && res.assets[0]) {
+                                const a = res.assets[0];
+                                if (
+                                        rejectTooBig(
+                                                await nativeFileSize(a.uri),
+                                                video ? "video" : "photo",
+                                        )
+                                )
+                                        return null;
+                                const ext = video ? "mp4" : "jpg";
+                                att = {
+                                        id: newAttId(),
+                                        type: video ? "video" : "image",
+                                        uri: a.uri,
+                                        name: `${video ? "video" : "photo"}_${Date.now()}.${ext}`,
+                                        mimeType: video
+                                                ? "video/mp4"
+                                                : "image/jpeg",
+                                };
+                        }
+                }
+                if (att) {
+                        addAttachment(att);
                         light();
                 }
                 inputRef.current?.focus();
+                return att;
         };
 
         const pickFile = async () => {
@@ -991,16 +1603,22 @@ export function CaptureScreen() {
                 });
                 if (!res.canceled && res.assets[0]) {
                         const a = res.assets[0];
-                        setAttachments((p) => [
-                                ...p,
-                                {
-                                        id: Date.now().toString(),
-                                        type: "file",
-                                        uri: a.uri,
-                                        name: a.name,
-                                        mimeType: a.mimeType ?? undefined,
-                                },
-                        ]);
+                        if (
+                                rejectTooBig(
+                                        Platform.OS === "web"
+                                                ? (a as any).size
+                                                : await nativeFileSize(a.uri),
+                                        "file",
+                                )
+                        )
+                                return;
+                        addAttachment({
+                                id: newAttId(),
+                                type: "file",
+                                uri: a.uri,
+                                name: a.name,
+                                mimeType: a.mimeType ?? undefined,
+                        });
                         light();
                 }
                 inputRef.current?.focus();
@@ -1010,18 +1628,14 @@ export function CaptureScreen() {
                 if (recording.isRecording) {
                         const result = await recording.stop();
                         if (result) {
-                                setAttachments((p) => [
-                                        ...p,
-                                        {
-                                                id: Date.now().toString(),
-                                                type: "voice",
-                                                uri: result.uri,
-                                                name: `voice_${result.durationSecs}s.m4a`,
-                                                mimeType: "audio/mp4",
-                                                durationSecs:
-                                                        result.durationSecs,
-                                        },
-                                ]);
+                                addAttachment({
+                                        id: newAttId(),
+                                        type: "voice",
+                                        uri: result.uri,
+                                        name: `voice_${result.durationSecs}s.m4a`,
+                                        mimeType: "audio/mp4",
+                                        durationSecs: result.durationSecs,
+                                });
                                 light();
                         }
                 } else {
@@ -1073,7 +1687,7 @@ export function CaptureScreen() {
                                                                 {wordCount}w
                                                         </Text>
                                                         <Text style={s.metricDivider}>
-                                                                ·
+                                                                |
                                                         </Text>
                                                         <Text style={s.metricText}>
                                                                 {charCount}c
@@ -1097,14 +1711,141 @@ export function CaptureScreen() {
                                 style={{ flex: 1 }}
                         >
                                 <View style={s.compose}>
+                                        <Animated.View
+                                                style={[
+                                                        { flex: 1 },
+                                                        textAnimStyle,
+                                                ]}
+                                        >
+                                                <View style={s.titleBox}>
+                                                        <Feather
+                                                                name="type"
+                                                                size={12}
+                                                                color="rgba(255,255,255,0.18)"
+                                                        />
+                                                        <TextInput
+                                                                ref={titleRef}
+                                                                value={title}
+                                                                onChangeText={
+                                                                        setTitle
+                                                                }
+                                                                placeholder="title..."
+                                                                placeholderTextColor="rgba(255,255,255,0.16)"
+                                                                style={s.titleInput}
+                                                                multiline={false}
+                                                                autoFocus
+                                                                autoCorrect
+                                                                autoCapitalize="sentences"
+                                                                keyboardAppearance="dark"
+                                                                selectionColor={
+                                                                        COLORS.caret
+                                                                }
+                                                        />
+                                                </View>
+                                                {editorMode === "write" ? (
+                                                        <TextInput
+                                                                ref={inputRef}
+                                                                id="void-body-input"
+                                                                value={text}
+                                                                onChangeText={
+                                                                        handleBodyChange
+                                                                }
+                                                                onSelectionChange={(
+                                                                        e,
+                                                                ) => {
+                                                                        selectionRef.current =
+                                                                                e
+                                                                                        .nativeEvent
+                                                                                        .selection;
+                                                                }}
+                                                                placeholder="pour it in..."
+                                                                placeholderTextColor="rgba(255,255,255,0.12)"
+                                                                style={s.input}
+                                                                multiline
+                                                                autoCorrect
+                                                                autoCapitalize="sentences"
+                                                                keyboardAppearance="dark"
+                                                                selectionColor={
+                                                                        COLORS.caret
+                                                                }
+                                                                textAlignVertical="top"
+                                                        />
+                                                ) : (
+                                                        <ScrollView
+                                                                style={{
+                                                                        flex: 1,
+                                                                }}
+                                                                contentContainerStyle={{
+                                                                        paddingBottom: 28,
+                                                                }}
+                                                                showsVerticalScrollIndicator={
+                                                                        false
+                                                                }
+                                                                keyboardShouldPersistTaps="handled"
+                                                        >
+                                                                {text.trim()
+                                                                        .length ===
+                                                                0 ? (
+                                                                        <View
+                                                                                style={
+                                                                                        previewEmptyS.wrap
+                                                                                }
+                                                                        >
+                                                                                <View
+                                                                                        style={
+                                                                                                previewEmptyS.icon
+                                                                                        }
+                                                                                >
+                                                                                        <Feather
+                                                                                                name="eye"
+                                                                                                size={
+                                                                                                        17
+                                                                                                }
+                                                                                                color="rgba(255,255,255,0.28)"
+                                                                                        />
+                                                                                </View>
+                                                                                <Text
+                                                                                        style={
+                                                                                                previewEmptyS.text
+                                                                                        }
+                                                                                >
+                                                                                        nothing
+                                                                                        to
+                                                                                        preview
+                                                                                        yet
+                                                                                </Text>
+                                                                        </View>
+                                                                ) : (
+                                                                        <NoteMarkdown
+                                                                                source={
+                                                                                        text
+                                                                                }
+                                                                                attachments={
+                                                                                        attachments
+                                                                                }
+                                                                                style={
+                                                                                        previewMarkdownStyle
+                                                                                }
+                                                                        />
+                                                                )}
+                                                        </ScrollView>
+                                                )}
+                                        </Animated.View>
+                                        {recording.isRecording && (
+                                                <RecordingBar
+                                                        formatted={
+                                                                recording.formatted
+                                                        }
+                                                />
+                                        )}
                                         {attachments.length > 0 && (
                                                 <ScrollView
                                                         horizontal
                                                         showsHorizontalScrollIndicator={false}
                                                         style={s.chips}
                                                         contentContainerStyle={{
-                                                                gap: 6,
-                                                                paddingRight: 4,
+                                                                gap: 10,
+                                                                paddingRight: 6,
                                                         }}
                                                         keyboardShouldPersistTaps="handled"
                                                 >
@@ -1129,64 +1870,6 @@ export function CaptureScreen() {
                                                         ))}
                                                 </ScrollView>
                                         )}
-                                        {recording.isRecording && (
-                                                <RecordingBar
-                                                        formatted={
-                                                                recording.formatted
-                                                        }
-                                                />
-                                        )}
-                                        <Animated.View
-                                                style={[
-                                                        { flex: 1 },
-                                                        textAnimStyle,
-                                                ]}
-                                        >
-                                                <View style={s.titleBox}>
-                                                        <Feather
-                                                                name="type"
-                                                                size={12}
-                                                                color="rgba(255,255,255,0.18)"
-                                                        />
-                                                        <TextInput
-                                                                ref={titleRef}
-                                                                value={title}
-                                                                onChangeText={
-                                                                        setTitle
-                                                                }
-                                                                placeholder="title…"
-                                                                placeholderTextColor="rgba(255,255,255,0.16)"
-                                                                style={s.titleInput}
-                                                                multiline={false}
-                                                                autoFocus
-                                                                autoCorrect
-                                                                autoCapitalize="sentences"
-                                                                keyboardAppearance="dark"
-                                                                selectionColor={
-                                                                        COLORS.caret
-                                                                }
-                                                        />
-                                                </View>
-                                                <TextInput
-                                                        ref={inputRef}
-                                                        value={text}
-                                                        onChangeText={setText}
-                                                        onSelectionChange={(e) => {
-                                                                selectionRef.current =
-                                                                        e.nativeEvent
-                                                                                .selection;
-                                                        }}
-                                                        placeholder="pour it in…"
-                                                        placeholderTextColor="rgba(255,255,255,0.12)"
-                                                        style={s.input}
-                                                        multiline
-                                                        autoCorrect
-                                                        autoCapitalize="sentences"
-                                                        keyboardAppearance="dark"
-                                                        selectionColor={COLORS.caret}
-                                                        textAlignVertical="top"
-                                                />
-                                        </Animated.View>
                                 </View>
                         </KeyboardAvoidingView>
 
@@ -1201,10 +1884,13 @@ export function CaptureScreen() {
                                 onPickCamera={() => pickCamera(false)}
                                 onPickVideo={() => pickCamera(true)}
                                 onToggleRecording={toggleRecording}
+                                onTogglePreview={togglePreview}
+                                previewOpen={editorMode === "preview"}
                                 isRecording={recording.isRecording}
                                 hasContent={hasContent}
                                 onSend={handleSend}
                                 sending={sending}
+                                bottomInset={insets.bottom}
                         />
 
                         <LabelPickerModal
@@ -1260,7 +1946,7 @@ const s = StyleSheet.create({
                 zIndex: 1,
         },
         logo: {
-                fontFamily: "Courier New",
+                        fontFamily: FONTS.mono,
                 fontSize: 10,
                 letterSpacing: 4,
                 color: "rgba(255,255,255,0.14)",
@@ -1269,14 +1955,14 @@ const s = StyleSheet.create({
         topRight: { flexDirection: "row", alignItems: "center", gap: 12 },
         metrics: { flexDirection: "row", alignItems: "center", gap: 4 },
         metricText: {
-                fontFamily: "Courier New",
+                        fontFamily: FONTS.mono,
                 fontSize: 9,
                 color: "rgba(255,255,255,0.18)",
                 letterSpacing: 1,
         },
         metricDivider: { fontSize: 9, color: "rgba(255,255,255,0.08)" },
         count: {
-                fontFamily: "Courier New",
+                        fontFamily: FONTS.mono,
                 fontSize: 10,
                 letterSpacing: 1.5,
         },
@@ -1288,7 +1974,7 @@ const s = StyleSheet.create({
         },
         chips: {
                 flexGrow: 0,
-                marginBottom: 10,
+                marginBottom: 12,
         },
         titleBox: {
                 flexDirection: "row",
@@ -1304,10 +1990,11 @@ const s = StyleSheet.create({
         },
         titleInput: {
                 flex: 1,
-                color: "rgba(255,255,255,0.35)",
-                fontSize: 15,
-                fontWeight: "400",
+                color: "rgba(255,255,255,0.6)",
+                fontSize: 17,
+                fontWeight: "500",
                 letterSpacing: 0.15,
+                fontFamily: FONTS.sans,
                 padding: 0,
         },
         input: {
@@ -1317,6 +2004,7 @@ const s = StyleSheet.create({
                 fontWeight: "400",
                 lineHeight: EDIT_LINE,
                 letterSpacing: 0.15,
+                fontFamily: FONTS.sans,
                 padding: 0,
                 paddingTop: 6,
                 textAlignVertical: "top",
@@ -1348,7 +2036,7 @@ const dropS = StyleSheet.create({
                 elevation: 30,
         },
         text: {
-                fontFamily: "Courier New",
+                        fontFamily: FONTS.mono,
                 fontSize: 13,
                 letterSpacing: 3,
                 textTransform: "uppercase",
