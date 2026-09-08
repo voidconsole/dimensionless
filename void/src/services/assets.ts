@@ -99,7 +99,7 @@ export function jsdelivrUrl(
                 .join("/");
         // Pin the branch returned by the API. A user can have a non-main
         // default branch, and omitting it makes freshly uploaded images 404.
-        return `https://cdn.jsdelivr.net/gh/${cfg.owner}/${ASSETS_REPO}@${branch}/${encoded}`;
+        return `https://cdn.jsdelivr.net/gh/${cfg.owner}/${ASSETS_REPO}/${encoded}`;
 }
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
