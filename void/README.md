@@ -101,16 +101,17 @@ Your token is stored securely on-device via expo-secure-store.
 
 ---
 
-## 6. Hosting the Web Build (GitHub Pages)
+## 6. Hosting the Web Build (Netlify)
 
-The web version is deployed to GitHub Pages automatically by the workflow in
-`.github/workflows/deploy.yml` (at the repo root) — it runs `expo export
---platform web` on every push and publishes `void/dist`.
+The web version is deployed on Netlify. `netlify.toml` (at the repo root)
+points the build at this folder: install deps, run `expo export --platform web`,
+and publish the resulting `dist/` directory.
 
-`app.json` sets `experiments.baseUrl` to the Pages path so all bundled assets
-resolve under `https://voidconsole.github.io/dimensionless/`.
-
-To build locally: `npx expo export --platform web` (output lands in `dist/`).
+- **Locally:** `npm ci && npx expo export --platform web`, then preview with
+  `npx serve dist`.
+- **SPA routing:** `public/_redirects` (`/* /index.html 200`) falls back to the
+  app on unknown paths; `public/404.html` is the last-resort redirect.
+- Both are copied into `dist/` by `expo export`.
 
 ---
 

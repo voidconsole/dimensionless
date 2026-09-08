@@ -51,9 +51,6 @@
       "eas": {
         "projectId": "3ab59453-16a0-4044-b69a-e0b0bc4d5068"
       }
-    },
-    "experiments": {
-      "baseUrl": "/dimensionless/"
     }
   }
 }

@@ -1,0 +1,7 @@
+[build]
+  base = "void"
+  command = "npm ci && npx expo export --platform web"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"

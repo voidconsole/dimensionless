@@ -5,26 +5,18 @@ A repository to hold all my explorations, thoughts, insights, experiments, ideas
 
 **VOID** lives in [`void/`](./void) and is a frictionless note-taking app that turns every note into a GitHub issue in this repo. Full setup instructions are in [`void/README.md`](./void/README.md).
 
-### Web / GitHub Pages
+### Web / Netlify
 
-The web build of VOID is deployed to GitHub Pages via CI:
+The web build of VOID is deployed via Netlify:
 
-- **Live site:** `https://voidconsole.github.io/dimensionless/`
-- **Deploy:** `.github/workflows/deploy.yml` runs `expo export --platform web` on every push to `void`/`main`, then publishes `void/dist` through the Pages Actions workflow.
-- The app is a single-page app (SPA), so `void/public/404.html` redirects unknown paths back to the app root.
+- **Deploy:** `netlify.toml` (repo root) has the build command (`expo export --platform web` with `base = "void"`) and publish dir `dist`. Connect the repo in Netlify, or run `netlify deploy`.
+- The app is a single-page app (SPA), so `void/public/_redirects` (`/* /index.html 200`) routes unknown paths back to the app and `void/public/404.html` is a final fallback.
 
-To deploy manually:
+To build and preview locally:
 
 ```bash
 cd void
 npm ci
 npx expo export --platform web
+npx serve dist
 ```
-
-Then publish the `void/dist` folder however you host it.
-
-### Enabling GitHub Actions Pages (one-time)
-
-1. Go to the repo **Settings → Pages**.
-2. Under **Build and deployment → Source**, select **GitHub Actions**.
-3. Push to the `void` branch. The workflow will build and deploy automatically.
